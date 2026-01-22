@@ -127,6 +127,7 @@ def run_training_loop(
                 overall_log_file.write(f"{episode + 1}, {cpu_time}, {api_time}, {total_episodes}, {total_steps}, {total_reward}\n")
                 overall_log_file.flush()
                 print(f"{trial_idx + 1}th trial attempt succeeded in training")
+                print(f"CPU Time: {cpu_time}, API Time: {api_time}, Total Episodes: {total_episodes}, Total Steps: {total_steps}, Total Reward: {total_reward}")    
                 break
             except Exception as e:
                 print(

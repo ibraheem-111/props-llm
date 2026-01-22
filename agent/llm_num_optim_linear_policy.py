@@ -33,6 +33,7 @@ class LLMNumOptimAgent:
         self.bias = bias
         self.optimum = optimum
         self.search_step_size = search_step_size
+        self.last_two_reasonings = []
 
         if not self.bias:
             param_count = dim_action * dim_state
@@ -99,18 +100,44 @@ class LLMNumOptimAgent:
     def train_policy(self, world: BaseWorld, logdir):
 
         def parse_parameters(input_text):
-            # This regex looks for integers or floating-point numbers (including optional sign)
-            s = input_text.split("\n")[0]
-            print("response:", s)
+            # Extract the last (final/unique) parameter set from the multi-line LLM response
+            # The LLM stops after finding unique params, so the last match is always the valid one
+            print("response:", input_text)
             pattern = re.compile(r"params\[(\d+)\]:\s*([+-]?\d+(?:\.\d+)?)")
-            matches = pattern.findall(s)
-
-            # Convert matched strings to float (or int if you prefer to differentiate)
-            results = []
-            for match in matches:
-                results.append(float(match[1]))
-            print(results)
-            assert len(results) == self.rank
+            
+            # Find all parameter matches in the entire response
+            all_matches = pattern.findall(input_text)
+            
+            assert len(all_matches) > 0, "No parameters found in LLM response"
+            
+            # Extract unique parameter indices to identify separate parameter sets
+            # Group matches by parameter index to identify complete parameter sets
+            param_sets = {}
+            current_set = {}
+            last_param_index = -1
+            
+            for match in all_matches:
+                param_index = int(match[0])
+                param_value = float(match[1])
+                
+                # If we see a param index lower than the last one, we've started a new set
+                if param_index < last_param_index:
+                    param_sets[len(param_sets)] = current_set
+                    current_set = {}
+                
+                current_set[param_index] = param_value
+                last_param_index = param_index
+            
+            # Add the final set
+            if current_set:
+                param_sets[len(param_sets)] = current_set
+            
+            # Extract parameters from the last parameter set
+            last_set = param_sets[len(param_sets) - 1]
+            results = [last_set[i] for i in sorted(last_set.keys())]
+            
+            print(f"Extracted final parameter set: {results}")
+            assert len(results) == self.rank, f"Expected {self.rank} parameters, got {len(results)}"
             return np.array(results).reshape(-1)
 
         def str_nd_examples(replay_buffer: EpisodeRewardBufferNoBias, n):
@@ -121,24 +148,29 @@ class LLMNumOptimAgent:
                 all_parameters.append((parameters.reshape(-1), reward))
 
             text = ""
+            i = 1
             for parameters, reward in all_parameters:
-                l = ""
-                for i in range(n):
-                    l += f"params[{i}]: {parameters[i]:.5g}; "
+                l = f"Example {i}: "
+                for j in range(n):
+                    l += f"params[{j}]: {parameters[j]:.5g}; "
                 fxy = reward
                 l += f"f(params): {fxy:.2f}\n"
                 text += l
+                text += "Parameters Uniqueness Check: "
+                i += 1
             return text
 
         # Update the policy using llm_brain, q_table and replay_buffer
         print("Updating the policy...")
+        previous_reasonings_str = "\n---\n".join(self.last_two_reasonings[-2:]) if self.last_two_reasonings else ""
         new_parameter_list, reasoning, api_time = self.llm_brain.llm_update_parameters_num_optim(
             str_nd_examples(self.replay_buffer, self.rank),
             parse_parameters,
             self.training_episodes,
             self.rank,
             self.optimum,
-            self.search_step_size
+            self.search_step_size,
+            previous_reasonings_str
         )
         self.api_call_time += api_time
 
@@ -170,6 +202,14 @@ class LLMNumOptimAgent:
         print(f"Results: {results}")
         result = np.mean(results)
         self.replay_buffer.add(new_parameter_list, result)
+        
+        # Extract and store the LLM's reasoning part for next iteration
+        reasoning_parts = reasoning.split("LLM:\n")
+        llm_reasoning_only = reasoning_parts[-1] if len(reasoning_parts) > 1 else reasoning
+        self.last_two_reasonings.append(llm_reasoning_only)
+        # Keep only last 2 reasonings
+        if len(self.last_two_reasonings) > 2:
+            self.last_two_reasonings = self.last_two_reasonings[-2:]
 
         self.training_episodes += 1
 

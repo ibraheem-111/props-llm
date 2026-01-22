@@ -3,3 +3,11 @@ numpy
 matplotlib
 pyyaml
 jinja2
+transformers>=4.30.0
+torch>=2.0.0
+pygame
+accelerate
+gymnasium[mujoco]
+openai
+google-genai
+anthropic

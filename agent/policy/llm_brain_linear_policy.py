@@ -4,11 +4,23 @@ import numpy as np
 import os
 import time
 from jinja2 import Template
-from openai import OpenAI
-import google.generativeai as genai
-import anthropic
+# from openai import OpenAI
+# import google.generativeai as genai
+# import anthropic
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import time
 
+# qwen_model_path = "/data/datasets/community/huggingface/models--Qwen--Qwen3-Coder-30B-A3B-Instruct/snapshots/b2cff646eb4bb1d68355c01b18ae02e7cf42d120/"
+deepseek_model_path = "/data/datasets/community/huggingface/models--deepseek-ai--DeepSeek-R1-Distill-Qwen-14B/"
+# qwen3_8b_model_path = "/data/datasets/community/huggingface/models--Qwen--Qwen3-8B/snapshots/2069b3fae1114555f3c020c81410e51fa0f656f2/"
+local_model = AutoModelForCausalLM.from_pretrained(
+    deepseek_model_path,
+    dtype="auto",
+    device_map="auto"
+)
+local_tokenizer = AutoTokenizer.from_pretrained(deepseek_model_path)   
+max_new_tokens = 8172
 
 class LLMBrain:
     def __init__(
@@ -34,14 +46,21 @@ class LLMBrain:
             "gpt-4o-2024-11-20",
             "gpt-4o-2024-08-06",
             "claude-3-7-sonnet-20250219",
+            "qwen-30b",
         ]
         self.llm_model_name = llm_model_name
+        self.model = None
+        self.tokenizer = None
+        
         if "gemini" in llm_model_name:
             self.model_group = "gemini"
             genai.configure(api_key=os.environ["GEMINI_API_KEY"])
         elif "claude" in llm_model_name:
             self.model_group = "anthropic"
             self.client = anthropic.Client(api_key=os.environ["ANTHROPIC_API_KEY"])
+        elif "qwen" in llm_model_name:
+            self.model_group = "local"
+            self.model_name_or_path = "/data/datasets/community/huggingface/models--Qwen--Qwen3-Coder-30B-A3B-Instruct/snapshots/b2cff646eb4bb1d68355c01b18ae02e7cf42d120/"
         else:
             self.model_group = "openai"
             self.client = OpenAI()
@@ -53,6 +72,8 @@ class LLMBrain:
         if self.model_group == "openai":
             self.llm_conversation.append({"role": role, "content": text})
         elif self.model_group == "anthropic":
+            self.llm_conversation.append({"role": role, "content": text})
+        elif self.model_group == "local":
             self.llm_conversation.append({"role": role, "content": text})
         else:
             self.llm_conversation.append({"role": role, "parts": text})
@@ -73,6 +94,37 @@ class LLMBrain:
                         max_tokens=1024,
                     )
                     response = message.content[0].text
+                elif self.model_group == "local":
+                    # Lazy load model and tokenizer on first use
+                    if self.model is None:
+                        self.tokenizer = local_tokenizer
+                        self.model = local_model
+                    
+                    # Apply chat template and tokenize
+                    text = self.tokenizer.apply_chat_template(
+                        self.llm_conversation,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    model_inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+                    
+                    # Generate response
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            **model_inputs,
+                            max_new_tokens=max_new_tokens,
+                            temperature=0.7,
+                            top_p=0.9,
+                        )
+                    
+                    output_ids = outputs[0][len(model_inputs.input_ids[0]):].tolist()
+                    # Decode and extract new response (remove input tokens)
+                    response_text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+                    # Remove the input part to get only the generated text
+                    # response = response_text[len(text):]
+                    response = response_text
+                    print(f"Generated response: {response}")
+                    
                 else:
                     model = genai.GenerativeModel(model_name=self.llm_model_name)
                     chat_session = model.start_chat(history=self.llm_conversation[:-1])
@@ -89,7 +141,7 @@ class LLMBrain:
                     print("Waiting for 60 seconds before retrying...")
                     time.sleep(60)
 
-            if self.model_group == "openai":
+            if self.model_group == "openai" or self.model_group == "local":
                 # add the response to self.llm_conversation
                 self.add_llm_conversation(response, "assistant")
             else:
@@ -111,6 +163,43 @@ class LLMBrain:
                         completion.choices[i].message.content
                         for i in range(num_responses)
                     ]
+                elif self.model_group == "local":
+                    # Lazy load model and tokenizer on first use
+                    if self.model is None:
+                        self.tokenizer = local_tokenizer
+                        self.model = local_model
+                        
+                    responses = []
+                    text = self.tokenizer.apply_chat_template(
+                        self.llm_conversation,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    model_inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+
+                    
+                    # Generate num_responses different responses
+                    for _ in range(num_responses):
+                        with torch.no_grad():
+                            outputs = self.model.generate(
+                                **model_inputs,
+                                max_new_tokens=max_new_tokens,
+                                temperature=temperature,
+                                top_p=0.9,
+                                do_sample=True,
+                            )
+
+                        output_ids = outputs[0][len(model_inputs.input_ids[0]):].tolist() 
+
+                        response_text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+                        # response = response_text[len(text):]
+                        response = response_text
+                        print(f"Generated response: {response}")
+                        responses.append(response)
+                    
+                    # Clean up GPU memory if using GPU
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                 else:
                     model = genai.GenerativeModel(model_name=self.llm_model_name)
                     responses = model.generate_content(
@@ -223,6 +312,7 @@ class LLMBrain:
         optimum=None,
         search_step_size=0.1,
         actions=None,
+        previous_iteration_reasonings="",
     ):
         self.reset_llm_conversation()
 
@@ -234,6 +324,7 @@ class LLMBrain:
                 "optimum": str(optimum),
                 "step_size": str(search_step_size),
                 "actions": actions,
+                "previous_iteration_reasonings": previous_iteration_reasonings,
             }
         )
 

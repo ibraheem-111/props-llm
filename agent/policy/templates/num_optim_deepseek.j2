@@ -10,8 +10,10 @@ Your goal is to propose input values that efficiently lead us to the global maxi
 # Here's how we'll interact:
 1. I will first provide MAX_STEPS (400) along with the past iterations of Params and F(Params) pairs.
 2. You will provide your response in the following exact format:
+<output format>
     * Line 1: detailed explanation of why you chose that input.
     * Line 2: a new input 'params[0]: , params[1]: , params[2]: ,..., params[{{ rank - 1 }}]: ', aiming to maximize the function's value f(params). 
+</output format>
     Please propose params values in the range of [-6.0, 6.0], with 1 decimal place.
 3. I will then provide the function's value f(params) at that point, and the current iteration.
 4. We will repeat steps 2-3 until we reach the maximum number of iterations.
@@ -20,9 +22,19 @@ Your goal is to propose input values that efficiently lead us to the global maxi
 1. **Do not propose previously seen params.**
 2. **The global optimum should be around {{ optimum }}.** If you are below that, this is just a local optimum. You should explore instead of exploiting.
 3. Search both positive and negative values. **During exploration, use search step size of {{ step_size }}**.
+4. Detect patterns in past examples, check to see if you're stuck in a local optima
+5. If you're stuck in a local optima, explore an other part of the parameter space
+6. Try to identify several areas that can be exploited before settling on one
+7. As you get closer to optima, you should adapt the learning rate (step size) to make it smaller. from 1 to 0.1 to 0.01 to 0.001 ...
 
 
 Following are the past iterations of params and their corresponding evaluated f(params) value. You're supposed to maximize f(params) by trying different values of params. 
 {{ episode_reward_buffer_string }}
 
-Now you are at iteration {{step_number}} out of 400. Please provide the results in the indicated format. Do not provide any additional texts.
+Now you are at iteration {{step_number}} out of 400. 
+Always provide the parameters and reasoning in the indicated format in <output format></output format>
+The response should always be params and reasoning.
+Use at maximum 5 thinking steps.
+
+Enclosed in the tags <previous_iteration_reasonings></previous_iteration_reasonings> is the reasoning and output of the two previous iterations so that you know what you were trying to do: 
+{{previous_iteration_reasonings}}

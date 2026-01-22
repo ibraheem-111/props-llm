@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Tuple
 
 class Policy:
-    def __init__(self, states: List[tuple[float]], actions: List[str]):
+    def __init__(self, states: List[Tuple[float]], actions: List[str]):
         self.states = states
         self.actions = actions
         self.mapping = dict() # datastructure for tracking policy
